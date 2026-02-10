@@ -9,28 +9,23 @@ local request = (syn and syn.request) or (http and http.request) or http_request
 local queue_on_teleport = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport)
 
 -- [[ CONFIGURATION LOAD ]] --
-local Config = getgenv().ViciousConfig
-if not Config then
-    if isfile and isfile("ViciousBeeConfig.json") then
-        pcall(function()
-            Config = HttpService:JSONDecode(readfile("ViciousBeeConfig.json"))
-        end)
-    end
-end
--- Defaults
-Config = Config or { RetryDelay = 6, HopDelay = 4, UseFieldChecks = true, WebhookUrl = "" }
+local Config = getgenv().ViciousConfig or {}
+
+-- [[ PROXY CONFIGURATION ]] --
+-- PASTE YOUR CLOUDFLARE WORKER URL HERE!
+-- Example: "https://bss-proxy.yourname.workers.dev"
+local CustomProxy = "https://bss-proxy.arkvldiscord.workers.dev/" 
+
+local ProxyDomains = {
+    CustomProxy, -- Priority 1: Your private worker
+    "https://games.roproxy.com", -- Backup 1
+    "https://public.roproxy.com", -- Backup 2
+    "https://roblox-api-proxy.glitch.me" -- Backup 3 (Sometimes works)
+}
 
 local LocalPlayer = Players.LocalPlayer
 local PlaceId = game.PlaceId
 local JobId = game.JobId
-
--- [[ PROXY LIST ]] --
--- These are public mirrors of the Roblox API. They prevent your IP from getting rate-limited.
-local ProxyDomains = {
-    "https://games.roproxy.com",
-    "https://public.roproxy.com"
-    -- Add more here if you find other working Roblox API mirrors
-}
 
 -- [[ QUEUE ON TELEPORT ]] --
 if queue_on_teleport then
@@ -60,7 +55,7 @@ end
 CalculateZones()
 
 local function GetFieldFromPosition(position)
-    if not Config.UseFieldChecks then return "Unknown (Checks Disabled)" end
+    if Config.UseFieldChecks == false then return "Unknown (Checks Disabled)" end
     for fieldName, bounds in pairs(FieldZones) do
         if position.X >= bounds.MinX and position.X <= bounds.MaxX and
            position.Z >= bounds.MinZ and position.Z <= bounds.MaxZ then
@@ -86,7 +81,7 @@ local function SendWebhook(beeName, fieldName)
             { ["name"] = "Job ID", ["value"] = string.format("```%s```", JobId), ["inline"] = false },
             { ["name"] = "Join Script", ["value"] = string.format("```lua\ngame:GetService('TeleportService'):TeleportToPlaceInstance(%s, '%s', game.Players.LocalPlayer)```", PlaceId, JobId), ["inline"] = false }
         },
-        ["footer"] = { ["text"] = "Benjaameen's Proxy Hopper" },
+        ["footer"] = { ["text"] = "Benjaameen's Custom Hopper" },
         ["timestamp"] = DateTime.now():ToIsoDate()
     }
 
@@ -98,26 +93,33 @@ local function SendWebhook(beeName, fieldName)
     })
 end
 
--- [[ SERVER HOP WITH PROXY ROTATION ]] --
+-- [[ SERVER HOP ]] --
 local function ServerHop()
     print("Initiating Server Hop...")
-    
-    -- Desync accounts
-    task.wait(math.random(1, 3))
+    task.wait(math.random(1, 3)) -- Desync
     
     local cursor = ""
     local foundServer = false
     local attempts = 0
     
-    -- Try scanning up to 10 pages
-    while not foundServer and attempts < 10 do
+    while not foundServer and attempts < 15 do
         attempts = attempts + 1
         
-        -- Pick a random proxy from the list
-        local currentProxy = ProxyDomains[math.random(1, #ProxyDomains)]
+        -- Select Proxy (Skip empty custom proxy if not set)
+        local currentProxy = ""
+        if CustomProxy ~= "" and attempts < 5 then
+            currentProxy = CustomProxy -- Try custom proxy first few times
+        else
+             -- Fallback to public list if custom fails or isn't set
+            local validProxies = {}
+            for _, p in pairs(ProxyDomains) do
+                if p ~= "" then table.insert(validProxies, p) end
+            end
+            currentProxy = validProxies[math.random(1, #validProxies)]
+        end
+
         local url = string.format("%s/v1/games/%s/servers/Public?sortOrder=Asc&limit=100&cursor=%s", currentProxy, PlaceId, cursor)
-        
-        print("Scanning servers via: " .. currentProxy)
+        print("Scanning via: " .. currentProxy)
         
         local success, result = pcall(function()
             return request({Url = url, Method = "GET"})
@@ -137,38 +139,28 @@ local function ServerHop()
                     foundServer = true
                     local targetServer = servers[math.random(1, #servers)]
                     print("Teleporting to: " .. targetServer)
-                    
                     TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
-                    
-                    -- Wait for teleport
                     task.wait(8)
-                    print("Teleport hang detected. Retrying...")
-                    foundServer = false -- Force retry if we are still here
-                end
-                
-                if body.nextPageCursor then
+                    print("Teleport hung. Retrying...")
+                    foundServer = false
+                elseif body.nextPageCursor then
                     cursor = body.nextPageCursor
                 else
-                    cursor = "" -- Reset cursor to start over if we ran out of pages
+                    cursor = ""
                 end
             end
-        elseif success and result and result.StatusCode == 429 then
-            warn("Proxy 429 (Rate Limit). Swapping proxy and retrying...")
-            -- Don't wait long, just swap proxy next loop
-            task.wait(1) 
         else
-            warn("Proxy Failed. Retrying...")
+            warn("Proxy Error (" .. (result and result.StatusCode or "Unknown") .. "). Rotating...")
             task.wait(1)
         end
     end
     
-    -- Fallback if loop finishes without hop
-    warn("Scan finished with no valid servers. Retrying in 5s...")
+    warn("Hop loop ended without success. Retrying...")
     task.wait(5)
     ServerHop()
 end
 
--- [[ MAIN LOGIC ]] --
+-- [[ MAIN ]] --
 local function Main()
     if not game:IsLoaded() then game.Loaded:Wait() end
     task.wait(3)
@@ -177,23 +169,18 @@ local function Main()
     local found = false
     local target = nil
     
-    print("Scanning for Vicious Bee...")
-    
     if monsters then
         for _, mob in pairs(monsters:GetChildren()) do
             if string.find(mob.Name, "Vicious") and mob:FindFirstChild("HumanoidRootPart") then
                 local field = GetFieldFromPosition(mob.HumanoidRootPart.Position)
+                local isValid = field and (Config.ValidFields == nil or Config.ValidFields[field] == true)
                 
-                if field and Config.ValidFields[field] then
+                if isValid then
                     found = true
                     target = mob
-                    print("!! FOUND VICIOUS BEE IN " .. field .. " !!")
+                    print("!! VICIOUS BEE FOUND IN " .. field .. " !!")
                     SendWebhook(mob.Name, field)
                     break
-                elseif field then
-                    print("Vicious Bee in " .. field .. " (Ignored)")
-                else
-                    print("Vicious Bee outside known fields.")
                 end
             end
         end
