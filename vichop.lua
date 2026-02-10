@@ -5,6 +5,7 @@ local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 
 -- [[ EXECUTOR COMPATIBILITY ]] --
+-- We prioritize 'request' which is standard for most executors including Xeno
 local request = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
 local queue_on_teleport = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport)
 
@@ -12,9 +13,8 @@ local queue_on_teleport = queue_on_teleport or (syn and syn.queue_on_teleport) o
 local Config = getgenv().ViciousConfig or {}
 
 -- [[ PROXY CONFIGURATION ]] --
--- The script will rotate randomly through these to avoid rate limits.
 local ProxyDomains = {
-    "https://games.roblox.com", -- Your Home Proxy (Direct Connection)
+    "https://games.roblox.com", -- Home Proxy
     "https://bss-proxy.arkvldiscord2.workers.dev",
     "https://bss-proxy.arkvldiscord3.workers.dev",
     "https://bss-proxy.arkvldiscord4.workers.dev"
@@ -62,16 +62,24 @@ local function GetFieldFromPosition(position)
     return nil
 end
 
--- [[ WEBHOOK ]] --
+-- [[ WEBHOOK FIX ]] --
 local function SendWebhook(beeName, fieldName)
-    if not Config.WebhookUrl or Config.WebhookUrl == "" or string.find(Config.WebhookUrl, "discord") == nil then return end
+    if not Config.WebhookUrl or Config.WebhookUrl == "" or string.find(Config.WebhookUrl, "discord") == nil then 
+        warn("Webhook URL invalid or missing.")
+        return 
+    end
     
+    print("Attempting to send webhook...")
+
     local isFull = #Players:GetPlayers() >= (Players.MaxPlayers - 1)
     local status = isFull and "Server Full" or "Server Joinable"
     local embedColor = isFull and 16711680 or 65280 
 
-    -- Logic: If Config.UserId is set, ping that user. Otherwise ping @everyone.
-    local pingContent = Config.UserId and ("<@" .. tostring(Config.UserId) .. "> Vicious Bee Found!") or "@everyone Vicious Bee Found!"
+    -- User Ping Logic
+    local pingContent = "@everyone Vicious Bee Found!"
+    if Config.UserId and tostring(Config.UserId) ~= "" then
+        pingContent = string.format("<@%s> Vicious Bee Found!", tostring(Config.UserId))
+    end
 
     local embed = {
         ["title"] = "⚠️ Vicious Bee Found! ⚠️",
@@ -88,15 +96,33 @@ local function SendWebhook(beeName, fieldName)
     local payload = HttpService:JSONEncode({
         ["content"] = pingContent,
         ["embeds"] = {embed},
-        ["allowed_mentions"] = { ["parse"] = {"everyone", "users", "roles"} } -- Forces Discord to allow the ping
+        ["username"] = "Vicious Bee Tracker",
+        ["avatar_url"] = "https://tr.rbxcdn.com/e8c460136d8d933390c9b0e27db68541/150/150/Image/Png" -- Adds a cool icon
     })
 
-    request({
-        Url = Config.WebhookUrl,
-        Method = "POST",
-        Headers = {["Content-Type"] = "application/json"},
-        Body = payload
-    })
+    -- Attempt to send with Debugging
+    local success, response = pcall(function()
+        return request({
+            Url = Config.WebhookUrl,
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "application/json",
+                ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" -- Mimics Chrome to bypass Discord blocks
+            },
+            Body = payload
+        })
+    end)
+
+    if success then
+        if response.StatusCode == 204 or response.StatusCode == 200 then
+            print("Webhook sent successfully!")
+        else
+            warn("Webhook Failed! Status Code: " .. tostring(response.StatusCode))
+            warn("Response Body: " .. tostring(response.Body))
+        end
+    else
+        warn("Webhook Request Error: " .. tostring(response))
+    end
 end
 
 -- [[ SERVER HOP ]] --
@@ -111,10 +137,7 @@ local function ServerHop()
     while not foundServer and attempts < 15 do
         attempts = attempts + 1
         
-        -- Pick a random proxy from your list (including Home Proxy)
         local currentProxy = ProxyDomains[math.random(1, #ProxyDomains)]
-        
-        -- Clean URL construction
         local url = string.format("%s/v1/games/%s/servers/Public?sortOrder=Asc&limit=100&cursor=%s", currentProxy, PlaceId, cursor)
         print("Scanning via: " .. currentProxy)
         
@@ -148,7 +171,7 @@ local function ServerHop()
             end
         else
             warn("Proxy Error (" .. (result and result.StatusCode or "Unknown") .. "). Rotating...")
-            task.wait(0.5) -- Fast rotate
+            task.wait(0.5)
         end
     end
     
