@@ -12,15 +12,12 @@ local queue_on_teleport = queue_on_teleport or (syn and syn.queue_on_teleport) o
 local Config = getgenv().ViciousConfig or {}
 
 -- [[ PROXY CONFIGURATION ]] --
--- PASTE YOUR CLOUDFLARE WORKER URL HERE!
--- Example: "https://bss-proxy.yourname.workers.dev"
-local CustomProxy = "https://bss-proxy.arkvldiscord.workers.dev/" 
-
+-- The script will rotate randomly through these to avoid rate limits.
 local ProxyDomains = {
-    CustomProxy, -- Priority 1: Your private worker
-    "https://games.roproxy.com", -- Backup 1
-    "https://public.roproxy.com", -- Backup 2
-    "https://roblox-api-proxy.glitch.me" -- Backup 3 (Sometimes works)
+    "https://games.roblox.com", -- Your Home Proxy (Direct Connection)
+    "https://bss-proxy.arkvldiscord2.workers.dev",
+    "https://bss-proxy.arkvldiscord3.workers.dev",
+    "https://bss-proxy.arkvldiscord4.workers.dev"
 }
 
 local LocalPlayer = Players.LocalPlayer
@@ -73,6 +70,9 @@ local function SendWebhook(beeName, fieldName)
     local status = isFull and "Server Full" or "Server Joinable"
     local embedColor = isFull and 16711680 or 65280 
 
+    -- Logic: If Config.UserId is set, ping that user. Otherwise ping @everyone.
+    local pingContent = Config.UserId and ("<@" .. tostring(Config.UserId) .. "> Vicious Bee Found!") or "@everyone Vicious Bee Found!"
+
     local embed = {
         ["title"] = "⚠️ Vicious Bee Found! ⚠️",
         ["description"] = string.format("**Finder:** %s\n**Field:** %s\n**Status:** %s", LocalPlayer.Name, fieldName, status),
@@ -85,11 +85,17 @@ local function SendWebhook(beeName, fieldName)
         ["timestamp"] = DateTime.now():ToIsoDate()
     }
 
+    local payload = HttpService:JSONEncode({
+        ["content"] = pingContent,
+        ["embeds"] = {embed},
+        ["allowed_mentions"] = { ["parse"] = {"everyone", "users", "roles"} } -- Forces Discord to allow the ping
+    })
+
     request({
         Url = Config.WebhookUrl,
         Method = "POST",
         Headers = {["Content-Type"] = "application/json"},
-        Body = HttpService:JSONEncode({ ["content"] = "@everyone Vicious Bee Found!", ["embeds"] = {embed} })
+        Body = payload
     })
 end
 
@@ -105,19 +111,10 @@ local function ServerHop()
     while not foundServer and attempts < 15 do
         attempts = attempts + 1
         
-        -- Select Proxy (Skip empty custom proxy if not set)
-        local currentProxy = ""
-        if CustomProxy ~= "" and attempts < 5 then
-            currentProxy = CustomProxy -- Try custom proxy first few times
-        else
-             -- Fallback to public list if custom fails or isn't set
-            local validProxies = {}
-            for _, p in pairs(ProxyDomains) do
-                if p ~= "" then table.insert(validProxies, p) end
-            end
-            currentProxy = validProxies[math.random(1, #validProxies)]
-        end
-
+        -- Pick a random proxy from your list (including Home Proxy)
+        local currentProxy = ProxyDomains[math.random(1, #ProxyDomains)]
+        
+        -- Clean URL construction
         local url = string.format("%s/v1/games/%s/servers/Public?sortOrder=Asc&limit=100&cursor=%s", currentProxy, PlaceId, cursor)
         print("Scanning via: " .. currentProxy)
         
@@ -151,7 +148,7 @@ local function ServerHop()
             end
         else
             warn("Proxy Error (" .. (result and result.StatusCode or "Unknown") .. "). Rotating...")
-            task.wait(1)
+            task.wait(0.5) -- Fast rotate
         end
     end
     
