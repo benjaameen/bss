@@ -44,7 +44,7 @@ local RobloxProxyDomains = {
 }
 
 -- WEBHOOK PROXY (Discord API)
-local WebhookProxy = "https://discord-proxy.arkvldiscord.workers.dev/" 
+local WebhookProxy = "https://discord-proxy.arkvldiscord.workers.dev" -- Removed foward slash. This was a fat headache.
 
 local LocalPlayer = Players.LocalPlayer
 local PlaceId = game.PlaceId
