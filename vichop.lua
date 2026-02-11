@@ -164,7 +164,7 @@ end
 -- [[ SERVER HOP ]] --
 local function ServerHop()
     print("Initiating Server Hop...")
-    task.wait(math.random(1, 3))
+    -- task.wait(math.random(1, 3))
     
     local cursor = ""
     local foundServer = false
