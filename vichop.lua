@@ -5,20 +5,25 @@ local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 
 -- [[ EXECUTOR COMPATIBILITY ]] --
--- We prioritize 'request' which is standard for most executors including Xeno
+-- I miss you synapse
 local request = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
 local queue_on_teleport = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport)
 
 -- [[ CONFIGURATION LOAD ]] --
 local Config = getgenv().ViciousConfig or {}
 
--- [[ PROXY CONFIGURATION ]] --
-local ProxyDomains = {
+-- [[ PROXIES ]] --
+
+-- 1. SERVER HOP PROXIES (For Roblox API)
+local RobloxProxyDomains = {
     "https://games.roblox.com", -- Home Proxy
     "https://bss-proxy.arkvldiscord2.workers.dev",
     "https://bss-proxy.arkvldiscord3.workers.dev",
     "https://bss-proxy.arkvldiscord4.workers.dev"
 }
+
+-- 2. WEBHOOK PROXY (For Discord API)
+local WebhookProxy = "https://discord-proxy.arkvldiscord.workers.dev/" 
 
 local LocalPlayer = Players.LocalPlayer
 local PlaceId = game.PlaceId
@@ -62,20 +67,27 @@ local function GetFieldFromPosition(position)
     return nil
 end
 
--- [[ WEBHOOK FIX ]] --
+-- [[ WEBHOOK SENDER ]] --
 local function SendWebhook(beeName, fieldName)
-    if not Config.WebhookUrl or Config.WebhookUrl == "" or string.find(Config.WebhookUrl, "discord") == nil then 
-        warn("Webhook URL invalid or missing.")
+    if not Config.WebhookUrl or Config.WebhookUrl == "" then 
+        warn("Webhook URL missing.")
         return 
     end
     
     print("Attempting to send webhook...")
 
+    -- CONSTRUCT URL
+    -- If WebhookProxy is set, we replace 'discord.com/api' with the proxy URL
+    local targetUrl = Config.WebhookUrl
+    if WebhookProxy ~= "" then
+        -- This regex replaces https://discord.com/api/webhooks/ID/TOKEN with proxy
+        targetUrl = string.gsub(targetUrl, "https://discord.com/api", WebhookProxy)
+    end
+
     local isFull = #Players:GetPlayers() >= (Players.MaxPlayers - 1)
     local status = isFull and "Server Full" or "Server Joinable"
     local embedColor = isFull and 16711680 or 65280 
 
-    -- User Ping Logic
     local pingContent = "@everyone Vicious Bee Found!"
     if Config.UserId and tostring(Config.UserId) ~= "" then
         pingContent = string.format("<@%s> Vicious Bee Found!", tostring(Config.UserId))
@@ -97,18 +109,14 @@ local function SendWebhook(beeName, fieldName)
         ["content"] = pingContent,
         ["embeds"] = {embed},
         ["username"] = "Vicious Bee Tracker",
-        ["avatar_url"] = "https://tr.rbxcdn.com/e8c460136d8d933390c9b0e27db68541/150/150/Image/Png" -- Adds a cool icon
+        ["avatar_url"] = "https://tr.rbxcdn.com/e8c460136d8d933390c9b0e27db68541/150/150/Image/Png"
     })
 
-    -- Attempt to send with Debugging
     local success, response = pcall(function()
         return request({
-            Url = Config.WebhookUrl,
+            Url = targetUrl,
             Method = "POST",
-            Headers = {
-                ["Content-Type"] = "application/json",
-                ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" -- Mimics Chrome to bypass Discord blocks
-            },
+            Headers = { ["Content-Type"] = "application/json" },
             Body = payload
         })
     end)
@@ -117,8 +125,9 @@ local function SendWebhook(beeName, fieldName)
         if response.StatusCode == 204 or response.StatusCode == 200 then
             print("Webhook sent successfully!")
         else
-            warn("Webhook Failed! Status Code: " .. tostring(response.StatusCode))
-            warn("Response Body: " .. tostring(response.Body))
+            warn("Webhook Failed! Code: " .. tostring(response.StatusCode))
+            -- If 404, it means the proxy URL is wrong or the worker code isn't deployed right
+            -- If 429, the proxy is handling rate limits (wait and retry happens inside the proxy usually, or here)
         end
     else
         warn("Webhook Request Error: " .. tostring(response))
@@ -128,7 +137,7 @@ end
 -- [[ SERVER HOP ]] --
 local function ServerHop()
     print("Initiating Server Hop...")
-    task.wait(math.random(1, 3)) -- Desync
+    task.wait(math.random(1, 3))
     
     local cursor = ""
     local foundServer = false
@@ -137,7 +146,7 @@ local function ServerHop()
     while not foundServer and attempts < 15 do
         attempts = attempts + 1
         
-        local currentProxy = ProxyDomains[math.random(1, #ProxyDomains)]
+        local currentProxy = RobloxProxyDomains[math.random(1, #RobloxProxyDomains)]
         local url = string.format("%s/v1/games/%s/servers/Public?sortOrder=Asc&limit=100&cursor=%s", currentProxy, PlaceId, cursor)
         print("Scanning via: " .. currentProxy)
         
@@ -161,7 +170,6 @@ local function ServerHop()
                     print("Teleporting to: " .. targetServer)
                     TeleportService:TeleportToPlaceInstance(PlaceId, targetServer, LocalPlayer)
                     task.wait(8)
-                    print("Teleport hung. Retrying...")
                     foundServer = false
                 elseif body.nextPageCursor then
                     cursor = body.nextPageCursor
