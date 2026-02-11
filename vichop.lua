@@ -9,20 +9,41 @@ local Workspace = game:GetService("Workspace")
 local request = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
 local queue_on_teleport = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport)
 
--- [[ CONFIGURATION LOAD ]] --
-local Config = getgenv().ViciousConfig or {}
+-- [[ 1. LOAD CONFIGURATION ]] --
+-- We try to get settings from the executor first. If they don't exist (after a hop), we read the file.
+local Config = getgenv().ViciousConfig
 
--- [[ PROXIES ]] --
+if not Config then
+    if isfile and isfile("ViciousBeeConfig.json") then
+        local success, result = pcall(function()
+            return HttpService:JSONDecode(readfile("ViciousBeeConfig.json"))
+        end)
+        if success then
+            Config = result
+            print("Configuration loaded from file successfully.")
+        else
+            warn("Failed to decode config file. Using defaults.")
+        end
+    else
+        warn("No config file found. Please run the settings script at least once.")
+    end
+end
 
--- 1. SERVER HOP PROXIES (For Roblox API)
+-- Fallback defaults to prevent crashes
+Config = Config or {}
+Config.ValidFields = Config.ValidFields or { ["Pepper Patch"] = true, ["Mountain Top Field"] = true, ["Coco Field"] = true } -- Safe defaults
+
+-- [[ 2. PROXY SETTINGS ]] --
+
+-- SERVER HOPPING PROXIES (Roblox API)
 local RobloxProxyDomains = {
-    "https://games.roblox.com", -- Home Proxy
+    "https://games.roblox.com",
     "https://bss-proxy.arkvldiscord2.workers.dev",
     "https://bss-proxy.arkvldiscord3.workers.dev",
     "https://bss-proxy.arkvldiscord4.workers.dev"
 }
 
--- 2. WEBHOOK PROXY (For Discord API)
+-- WEBHOOK PROXY (Discord API)
 local WebhookProxy = "https://discord-proxy.arkvldiscord.workers.dev/" 
 
 local LocalPlayer = Players.LocalPlayer
@@ -69,19 +90,26 @@ end
 
 -- [[ WEBHOOK SENDER ]] --
 local function SendWebhook(beeName, fieldName)
+    -- DEBUG: Print what the script *thinks* the URL is
     if not Config.WebhookUrl or Config.WebhookUrl == "" then 
-        warn("Webhook URL missing.")
+        warn("CRITICAL: Webhook URL is missing in the Config!")
         return 
     end
     
     print("Attempting to send webhook...")
 
     -- CONSTRUCT URL
-    -- If WebhookProxy is set, we replace 'discord.com/api' with the proxy URL
     local targetUrl = Config.WebhookUrl
+    
     if WebhookProxy ~= "" then
-        -- This regex replaces https://discord.com/api/webhooks/ID/TOKEN with proxy
-        targetUrl = string.gsub(targetUrl, "https://discord.com/api", WebhookProxy)
+        -- This logic expects your Config.WebhookUrl to be the normal Discord one
+        -- It replaces 'discord.com/api' with your proxy
+        if string.find(targetUrl, "discord.com") then
+            targetUrl = string.gsub(targetUrl, "https://discord.com/api", WebhookProxy)
+            print("Using Proxy URL: " .. targetUrl)
+        else
+            warn("Webhook URL in config does not look like a Discord URL. Sending directly...")
+        end
     end
 
     local isFull = #Players:GetPlayers() >= (Players.MaxPlayers - 1)
@@ -101,7 +129,7 @@ local function SendWebhook(beeName, fieldName)
             { ["name"] = "Job ID", ["value"] = string.format("```%s```", JobId), ["inline"] = false },
             { ["name"] = "Join Script", ["value"] = string.format("```lua\ngame:GetService('TeleportService'):TeleportToPlaceInstance(%s, '%s', game.Players.LocalPlayer)```", PlaceId, JobId), ["inline"] = false }
         },
-        ["footer"] = { ["text"] = "Benjaameen's Custom Hopper" },
+        ["footer"] = { ["text"] = "Benjaameen's Proxy Hopper" },
         ["timestamp"] = DateTime.now():ToIsoDate()
     }
 
@@ -126,8 +154,7 @@ local function SendWebhook(beeName, fieldName)
             print("Webhook sent successfully!")
         else
             warn("Webhook Failed! Code: " .. tostring(response.StatusCode))
-            -- If 404, it means the proxy URL is wrong or the worker code isn't deployed right
-            -- If 429, the proxy is handling rate limits (wait and retry happens inside the proxy usually, or here)
+            warn("Response: " .. tostring(response.Body))
         end
     else
         warn("Webhook Request Error: " .. tostring(response))
@@ -201,6 +228,7 @@ local function Main()
         for _, mob in pairs(monsters:GetChildren()) do
             if string.find(mob.Name, "Vicious") and mob:FindFirstChild("HumanoidRootPart") then
                 local field = GetFieldFromPosition(mob.HumanoidRootPart.Position)
+                -- Fix for nil valid fields
                 local isValid = field and (Config.ValidFields == nil or Config.ValidFields[field] == true)
                 
                 if isValid then
